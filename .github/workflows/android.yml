@@ -1,4 +1,4 @@
-Name: Ets Amani Android Build
+name: Ets Amani Android Build
 
 on:
   workflow_dispatch:
