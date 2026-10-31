@@ -1,0 +1,6 @@
+{
+  "name": "Ets AMANI",
+  "description": "Plate-forme de supervision générale, de gestion opérationnelle, de contrôle interne, de suivi, de collaboration et de traçabilité de l'Ets AMANI",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

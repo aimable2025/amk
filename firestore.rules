@@ -1,0 +1,2192 @@
+rules_version = '2';
+
+service cloud.firestore {
+match /databases/{database}/documents {
+
+/* =========================================================
+   ETS AMANI — FIRESTORE SECURITY RULES
+
+   RBAC
+   + ISOLATION PAR AGENCE
+   + DG FEATURE CONTROL
+   + REGISTRATION WORKFLOW
+   + DELEGATIONS
+
+   ROLES OFFICIELS :
+   - administrateur_systeme
+   - directeur_general
+   - administrateur_agence
+   - agent
+   - abonne
+   - client
+
+   PRINCIPES :
+   - Administrateur Système = autorité technique
+   - Directeur Général = autorité opérationnelle globale
+   - Administrateur d'agence = autorité limitée à son agence
+   - Les données métier d'agence sont isolées par agencyId
+   - users.permissions = ARRAY DE STRINGS
+   - delegations/{uid}.permissions = MAP DE PERMISSIONS
+   - Les inscriptions publiques concernent uniquement
+     Client et Abonné
+   - Une demande d'inscription devient directement
+     l'utilisateur final dans users/{uid}
+   ========================================================= */
+
+
+/* =========================================================
+   AUTHENTIFICATION
+   ========================================================= */
+
+function isSignedIn() {
+  return request.auth != null;
+}
+
+function isOwnUser(uid) {
+  return isSignedIn()
+    && request.auth.uid == uid;
+}
+
+
+/* =========================================================
+   UTILISATEUR COURANT
+   ========================================================= */
+
+function currentUserExists() {
+  return isSignedIn()
+    && exists(
+      /databases/$(database)/documents/users/$(request.auth.uid)
+    );
+}
+
+function currentUser() {
+  return get(
+    /databases/$(database)/documents/users/$(request.auth.uid)
+  );
+}
+
+function currentUserData() {
+  return currentUser().data;
+}
+
+
+/* =========================================================
+   UTILISATEUR ACTIF
+   ========================================================= */
+
+function isActiveUser() {
+  return currentUserExists()
+    && ('status' in currentUserData())
+    && currentUserData().status == 'active'
+    && ('isApproved' in currentUserData())
+    && currentUserData().isApproved == true;
+}
+
+
+/* =========================================================
+   ROLES OFFICIELS
+   ========================================================= */
+
+function isSystemAdmin() {
+  return isActiveUser()
+    && currentUserData().role == 'administrateur_systeme';
+}
+
+function isDG() {
+  return isActiveUser()
+    && currentUserData().role == 'directeur_general';
+}
+
+function isAdministrateurAgence() {
+  return isActiveUser()
+    && currentUserData().role == 'administrateur_agence';
+}
+
+function isAgent() {
+  return isActiveUser()
+    && currentUserData().role == 'agent';
+}
+
+function isAbonne() {
+  return isActiveUser()
+    && currentUserData().role == 'abonne';
+}
+
+function isClient() {
+  return isActiveUser()
+    && currentUserData().role == 'client';
+}
+
+
+/* =========================================================
+   PERMISSIONS
+
+   users.permissions = ARRAY DE STRINGS
+   ========================================================= */
+
+function hasPermission(permission) {
+  return isActiveUser()
+    && (
+      isSystemAdmin()
+      ||
+      isDG()
+      ||
+      (
+        ('permissions' in currentUserData())
+        &&
+        (
+          '*' in currentUserData().permissions
+          ||
+          permission in currentUserData().permissions
+        )
+      )
+    );
+}
+
+
+/* =========================================================
+   AGENCE COURANTE
+   ========================================================= */
+
+function currentAgencyId() {
+  return currentUserData().get('agencyId', null);
+}
+
+function belongsToAgency(agencyId) {
+  return isActiveUser()
+    && currentAgencyId() != null
+    && currentAgencyId() == agencyId;
+}
+
+function isAgentInCurrentAgency() {
+  return isAgent()
+    && currentAgencyId() != null;
+}
+
+function hasAgentFunction(functionId) {
+  return isAgentInCurrentAgency()
+    &&
+    (
+      currentUserData().get('function', null) == functionId
+      ||
+      functionId in currentUserData().get('functions', [])
+    );
+}
+
+
+/* =========================================================
+   DIRECTEUR GENERAL OFFICIEL
+   ========================================================= */
+
+function isCurrentDirectorGeneral() {
+  return isDG()
+    && exists(
+      /databases/$(database)/documents/system/directorGeneral
+    )
+    && get(
+      /databases/$(database)/documents/system/directorGeneral
+    ).data.uid == request.auth.uid
+    && get(
+      /databases/$(database)/documents/system/directorGeneral
+    ).data.status == 'active';
+}
+
+
+/* =========================================================
+   FEATURE FLAGS GLOBAUX
+   ========================================================= */
+
+function globalFeatureEnabled(featureId) {
+  return exists(
+    /databases/$(database)/documents/systemFeatures/$(featureId)
+  )
+  &&
+  get(
+    /databases/$(database)/documents/systemFeatures/$(featureId)
+  ).data.get('enabled', false) == true;
+}
+
+
+/* =========================================================
+   FEATURE FLAGS SPECIFIQUES AU DG
+   ========================================================= */
+
+function dgFeatureEnabled(featureId) {
+  return exists(
+    /databases/$(database)/documents/system/directorGeneral/features/$(featureId)
+  )
+  &&
+  get(
+    /databases/$(database)/documents/system/directorGeneral/features/$(featureId)
+  ).data.get('enabled', false) == true;
+}
+
+function canUseDGFeature(featureId, permission) {
+  return isCurrentDirectorGeneral()
+    && hasPermission(permission)
+    && dgFeatureEnabled(featureId);
+}
+
+
+/* =========================================================
+   DELEGATIONS
+   ========================================================= */
+
+function hasDelegatedPermission(permission) {
+  return isActiveUser()
+    && exists(
+      /databases/$(database)/documents/delegations/$(request.auth.uid)
+    )
+    &&
+    get(
+      /databases/$(database)/documents/delegations/$(request.auth.uid)
+    ).data.get('status', 'inactive') == 'active'
+    &&
+    (
+      !(
+        'expiresAt'
+        in get(
+          /databases/$(database)/documents/delegations/$(request.auth.uid)
+        ).data
+      )
+      ||
+      get(
+        /databases/$(database)/documents/delegations/$(request.auth.uid)
+      ).data.expiresAt == null
+      ||
+      request.time <
+      get(
+        /databases/$(database)/documents/delegations/$(request.auth.uid)
+      ).data.expiresAt
+    )
+    &&
+    get(
+      /databases/$(database)/documents/delegations/$(request.auth.uid)
+    ).data.get('permissions', {}).get(permission, false) == true;
+}
+
+
+/* =========================================================
+   VALIDATION DES INSCRIPTIONS
+   ========================================================= */
+
+function canValidateRegistrations() {
+  return isActiveUser()
+    &&
+    (
+      isSystemAdmin()
+      ||
+      isCurrentDirectorGeneral()
+      ||
+      hasPermission('registrations.validate')
+      ||
+      hasDelegatedPermission('registrations.validate')
+    );
+}
+
+
+/* =========================================================
+   PERMISSIONS DELEGABLES
+   ========================================================= */
+
+function isDelegablePermission(permission) {
+  return permission in {
+    'registrations.validate': true,
+    'users.read': true,
+    'reports.manage': true,
+    'audit.read': true,
+    'notifications.manage': true,
+    'communication.manage': true,
+    'billetage.access': true,
+    'transactions.manage': true,
+    'commissions.manage': true
+  };
+}
+
+
+/* =========================================================
+   VALIDATION D'UNE DEMANDE D'INSCRIPTION
+
+   La demande est stockée directement dans users/{uid}.
+
+   ETAT INITIAL :
+   - role = client | abonne
+   - status = pending
+   - isApproved = false
+   - registrationStatus = pending
+
+   APRES VALIDATION :
+   - status = active
+   - isApproved = true
+   - registrationStatus = approved
+
+   APRES REJET :
+   - status = rejected
+   - isApproved = false
+   - registrationStatus = rejected
+   ========================================================= */
+
+function isPendingPublicRegistration(resourceData) {
+  return resourceData.get('role', null) in [
+    'client',
+    'abonne'
+  ]
+  &&
+  resourceData.get('status', null) in [
+    'pending',
+    'rejected'
+  ]
+  &&
+  resourceData.get('isApproved', false) == false
+  &&
+  resourceData.get('registrationStatus', null) in [
+    'pending',
+    'under_review',
+    'rejected'
+  ];
+}
+
+function isPublicRegistrationRole(data) {
+  return data.get('role', null) in [
+    'client',
+    'abonne'
+  ];
+}
+
+function isRegistrationApproval(requestData, resourceData) {
+  return requestData.get('status', null) == 'active'
+    &&
+    requestData.get('isApproved', false) == true
+    &&
+    requestData.get('registrationStatus', null) == 'approved'
+    &&
+    resourceData.get('status', null) in [
+      'pending',
+      'under_review'
+    ]
+    &&
+    resourceData.get('isApproved', false) == false
+    &&
+    resourceData.get('registrationStatus', null) in [
+      'pending',
+      'under_review'
+    ];
+}
+
+function isRegistrationRejection(requestData, resourceData) {
+  return requestData.get('status', null) == 'rejected'
+    &&
+    requestData.get('isApproved', false) == false
+    &&
+    requestData.get('registrationStatus', null) == 'rejected'
+    &&
+    resourceData.get('status', null) in [
+      'pending',
+      'under_review'
+    ]
+    &&
+    resourceData.get('isApproved', false) == false
+    &&
+    resourceData.get('registrationStatus', null) in [
+      'pending',
+      'under_review'
+    ];
+}
+
+
+/* =========================================================
+   USERS
+   ========================================================= */
+
+match /users/{uid} {
+
+  /* -------------------------------------------------------
+     INSCRIPTION PUBLIQUE
+
+     Le compte Firebase Authentication doit correspondre
+     au document users/{uid}.
+
+     Seuls Client et Abonné peuvent être créés publiquement.
+
+     Le compte est INACTIF tant qu'il n'est pas validé.
+     ------------------------------------------------------- */
+
+  allow create: if
+    isOwnUser(uid)
+    &&
+    request.resource.data.uid == request.auth.uid
+    &&
+    request.resource.data.get('role', null) in [
+      'client',
+      'abonne'
+    ]
+    &&
+    request.resource.data.get('status', null) == 'pending'
+    &&
+    request.resource.data.get('isApproved', false) == false
+    &&
+    request.resource.data.get('registrationStatus', null) == 'pending'
+    &&
+    ('permissions' in request.resource.data)
+    &&
+    request.resource.data.permissions.size() == 0
+    &&
+    (
+      request.resource.data.get('role', null) == 'client'
+      ||
+      (
+        request.resource.data.get('role', null) == 'abonne'
+        &&
+        request.resource.data.get('agencyId', null) != null
+      )
+    );
+
+allow create: if
+  isSystemAdmin()
+  &&
+  request.resource.data.uid == uid
+  &&
+  request.resource.data.role == 'directeur_general'
+  &&
+  request.resource.data.category == 'direction'
+  &&
+  request.resource.data.status == 'active'
+  &&
+  request.resource.data.isApproved == true
+  &&
+  request.resource.data.registrationStatus == 'approved';
+
+
+  /* -------------------------------------------------------
+     LECTURE
+
+     Un utilisateur peut toujours lire son propre document.
+     Les utilisateurs actifs disposent des droits selon RBAC.
+     ------------------------------------------------------- */
+
+  allow read: if
+    isOwnUser(uid)
+
+    ||
+
+    isSystemAdmin()
+
+    ||
+
+    isDG()
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      && resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+
+    ||
+
+    (
+      hasPermission('users.read')
+      &&
+      (
+        currentAgencyId() == null
+        ||
+        resource.data.get('agencyId', null)
+           == currentAgencyId()
+      )
+    );
+
+
+  /* -------------------------------------------------------
+     MISE A JOUR DE SON PROPRE PROFIL (photoURL, displayName, phone)
+     ------------------------------------------------------- */
+
+  allow update: if
+    isOwnUser(uid)
+    &&
+    request.resource.data.role == resource.data.role
+    &&
+    request.resource.data.status == resource.data.status
+    &&
+    request.resource.data.isApproved == resource.data.isApproved
+    &&
+    request.resource.data.diff(resource.data)
+      .affectedKeys()
+      .hasOnly([
+        'photoURL',
+        'displayName',
+        'phone',
+        'updatedAt'
+      ]);
+
+  /* -------------------------------------------------------
+     MODIFICATION PAR ADMINISTRATEUR SYSTEME
+
+     L'Administrateur Système peut gérer tous les comptes.
+     ------------------------------------------------------- */
+
+  allow update: if
+    isSystemAdmin();
+
+
+  /* -------------------------------------------------------
+     VALIDATION DES INSCRIPTIONS PAR DG
+
+     Le DG peut :
+     - passer pending/under_review → active/approved
+     - passer pending/under_review → rejected
+
+     Il ne peut pas modifier un Administrateur Système.
+     ------------------------------------------------------- */
+
+  allow update: if
+    isCurrentDirectorGeneral()
+    &&
+    resource.data.role != 'administrateur_systeme'
+    &&
+    request.resource.data.role != 'administrateur_systeme'
+    &&
+    (
+      (
+        isRegistrationApproval(
+          request.resource.data,
+          resource.data
+        )
+        &&
+        request.resource.data.uid == resource.data.uid
+        &&
+        request.resource.data.role
+          == resource.data.role
+        &&
+        request.resource.data.get('requestedRole', null)
+          == resource.data.get('requestedRole', null)
+        &&
+        request.resource.data.get('agencyId', null)
+          == resource.data.get('agencyId', null)
+        &&
+        request.resource.data.diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'status',
+            'isApproved',
+            'registrationStatus',
+            'approvedBy',
+            'approvedAt',
+            'reviewedBy',
+            'reviewedAt',
+            'updatedAt'
+          ])
+      )
+
+      ||
+
+      (
+        isRegistrationRejection(
+          request.resource.data,
+          resource.data
+        )
+        &&
+        request.resource.data.uid == resource.data.uid
+        &&
+        request.resource.data.role
+          == resource.data.role
+        &&
+        request.resource.data.get('requestedRole', null)
+          == resource.data.get('requestedRole', null)
+        &&
+        request.resource.data.get('agencyId', null)
+          == resource.data.get('agencyId', null)
+        &&
+        request.resource.data.diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'status',
+            'isApproved',
+            'registrationStatus',
+            'rejectionReason',
+            'rejectedBy',
+            'rejectedAt',
+            'reviewedBy',
+            'reviewedAt',
+            'updatedAt'
+          ])
+      )
+
+      ||
+
+      (
+        request.resource.data.get('registrationStatus', null) == 'under_review'
+        &&
+        request.resource.data.diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'registrationStatus',
+            'reviewedBy',
+            'reviewedAt',
+            'updatedAt'
+          ])
+      )
+
+      ||
+
+      (
+        hasPermission('users.manage')
+        &&
+        request.resource.data.diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'nom',
+            'prenom',
+            'email',
+            'telephone',
+            'role',
+            'agentCategory',
+            'agenceId',
+            'agenceNom',
+            'notes'
+          ])
+        &&
+        request.resource.data.role
+          != 'administrateur_systeme'
+      )
+    );
+
+
+  /* -------------------------------------------------------
+     VALIDATION PAR ADMINISTRATEUR D'AGENCE
+
+     L'Administrateur d'agence peut valider/rejeter
+     uniquement les demandes appartenant à son agence.
+
+     Pour un Abonné :
+     agencyId doit obligatoirement correspondre.
+
+     Pour un Client :
+     agencyId peut être null.
+     ------------------------------------------------------- */
+
+  allow update: if
+    isAdministrateurAgence()
+    &&
+    hasPermission('users.manage')
+    &&
+    resource.data.role != 'administrateur_systeme'
+    &&
+    resource.data.role != 'directeur_general'
+    &&
+    request.resource.data.role != 'administrateur_systeme'
+    &&
+    request.resource.data.role != 'directeur_general'
+    &&
+    (
+      (
+        resource.data.get('role', null) == 'abonne'
+        &&
+        resource.data.get('agencyId', null)
+          == currentAgencyId()
+        &&
+        request.resource.data.get('agencyId', null)
+          == currentAgencyId()
+        &&
+        (
+          (
+            isRegistrationApproval(
+              request.resource.data,
+              resource.data
+            )
+            &&
+            request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasOnly([
+                'status',
+                'isApproved',
+                'registrationStatus',
+                'approvedBy',
+                'approvedAt',
+                'reviewedBy',
+                'reviewedAt',
+                'updatedAt'
+              ])
+          )
+          ||
+          (
+            isRegistrationRejection(
+              request.resource.data,
+              resource.data
+            )
+            &&
+            request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasOnly([
+                'status',
+                'isApproved',
+                'registrationStatus',
+                'rejectionReason',
+                'rejectedBy',
+                'rejectedAt',
+                'reviewedBy',
+                'reviewedAt',
+                'updatedAt'
+              ])
+          )
+        )
+      )
+
+      ||
+
+      (
+        resource.data.get('role', null) == 'client'
+        &&
+        (
+          resource.data.get('agencyId', null) == null
+          ||
+          resource.data.get('agencyId', null)
+            == currentAgencyId()
+        )
+        &&
+        (
+          request.resource.data.get('agencyId', null) == null
+          ||
+          request.resource.data.get('agencyId', null)
+            == currentAgencyId()
+        )
+        &&
+        (
+          (
+            isRegistrationApproval(
+              request.resource.data,
+              resource.data
+            )
+            &&
+            request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasOnly([
+                'status',
+                'isApproved',
+                'registrationStatus',
+                'approvedBy',
+                'approvedAt',
+                'reviewedBy',
+                'reviewedAt',
+                'updatedAt'
+              ])
+          )
+          ||
+          (
+            isRegistrationRejection(
+              request.resource.data,
+              resource.data
+            )
+            &&
+            request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasOnly([
+                'status',
+                'isApproved',
+                'registrationStatus',
+                'rejectionReason',
+                'rejectedBy',
+                'rejectedAt',
+                'reviewedBy',
+                'reviewedAt',
+                'updatedAt'
+              ])
+          )
+        )
+      )
+    );
+
+
+  /* -------------------------------------------------------
+     SUPPRESSION
+     ------------------------------------------------------- */
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   REGISTRE DU DIRECTEUR GENERAL
+   ========================================================= */
+
+match /system/directorGeneral {
+  allow read: if isActiveUser();
+
+  allow create, update, delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   FEATURE FLAGS DU DG
+   ========================================================= */
+
+match /system/directorGeneral/features/{featureId} {
+
+  allow read: if isActiveUser();
+
+  allow create, update, delete: if isSystemAdmin();
+}
+
+match /system/directorGeneral/history/{historyId} {
+
+  allow read: if isSystemAdmin() || isDG();
+
+  allow create, update, delete: if isSystemAdmin();
+}
+
+match /systemControls/{controlId} {
+
+  allow read: if isActiveUser();
+
+  allow create, update: if isSystemAdmin() || (isDG() && controlId == 'salarySettings');
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   FEATURE FLAGS GLOBAUX
+   ========================================================= */
+
+match /systemFeatures/{featureId} {
+
+  allow read: if isActiveUser();
+
+  allow create, update, delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   CONFIGURATION SYSTEME
+   ========================================================= */
+
+match /systemConfig/{configId} {
+
+  allow read: if isActiveUser();
+
+  allow create, update, delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   ANCIEN REGISTRE registrationRequests
+
+   Conservé uniquement pour compatibilité avec d'anciennes
+   données ou anciennes fonctionnalités.
+
+   La source officielle actuelle des inscriptions est :
+   users/{uid}
+   ========================================================= */
+
+match /registrationRequests/{requestId} {
+
+  allow create: if
+    isSignedIn()
+    &&
+    request.resource.data.uid == request.auth.uid
+    &&
+    request.resource.data.status == 'pending'
+    &&
+    request.resource.data.get('requestedRole', null) in [
+      'client',
+      'abonne'
+    ];
+
+  allow read: if
+    (
+      isSignedIn()
+      &&
+      resource.data.uid == request.auth.uid
+    )
+    ||
+    isSystemAdmin()
+    ||
+    isCurrentDirectorGeneral()
+    ||
+    (
+      isAdministrateurAgence()
+      &&
+      (
+        resource.data.get('agencyId', null) == null
+        ||
+        resource.data.get('agencyId', null)
+          == currentAgencyId()
+      )
+    )
+    ||
+    hasDelegatedPermission('registrations.validate');
+
+  allow update: if
+    isSystemAdmin()
+    ||
+    (
+      canValidateRegistrations()
+      &&
+      request.resource.data.diff(resource.data)
+        .affectedKeys()
+        .hasOnly([
+          'status',
+          'reviewedBy',
+          'reviewedAt',
+          'reviewReason'
+        ])
+      &&
+      request.resource.data.uid == resource.data.uid
+      &&
+      request.resource.data.get('requestedRole', null)
+         == resource.data.get('requestedRole', null)
+      &&
+      request.resource.data.get('requestedCategory', null)
+         == resource.data.get('requestedCategory', null)
+    );
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   DELEGATIONS DG
+   ========================================================= */
+
+match /delegations/{uid} {
+
+  allow read: if
+    isSystemAdmin()
+    ||
+    isCurrentDirectorGeneral()
+    ||
+    isOwnUser(uid);
+
+  allow create, update: if
+    isSystemAdmin()
+
+    ||
+
+    (
+      isCurrentDirectorGeneral()
+      &&
+      request.resource.data.grantedBy == request.auth.uid
+      &&
+      request.resource.data.userId == uid
+      &&
+      exists(
+        /databases/$(database)/documents/users/$(uid)
+      )
+      &&
+      get(
+        /databases/$(database)/documents/users/$(uid)
+      ).data.status == 'active'
+      &&
+      request.resource.data.status == 'active'
+      &&
+      request.resource.data.get('permissions', {})
+        .keys()
+        .hasOnly([
+          'registrations.validate',
+          'users.read',
+          'reports.manage',
+          'audit.read',
+          'notifications.manage',
+          'communication.manage',
+          'billetage.access',
+          'transactions.manage',
+          'commissions.manage'
+        ])
+    );
+
+  allow delete: if
+    isSystemAdmin()
+    ||
+    isCurrentDirectorGeneral();
+}
+
+
+/* =========================================================
+   AGENCES
+   ========================================================= */
+
+match /agencies/{agencyId} {
+
+  allow read: if true;
+
+  allow create: if
+    isSystemAdmin()
+    ||
+    hasPermission('agencies.manage');
+
+  allow update: if
+    isSystemAdmin()
+    ||
+    hasPermission('agencies.manage');
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   TRANSACTIONS
+   ========================================================= */
+
+match /transactions/{transactionId} {
+
+  allow read: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('transactions.manage')
+      &&
+      dgFeatureEnabled('transactions.manage')
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('transactions.manage')
+      &&
+      belongsToAgency(
+        resource.data.get('agencyId', null)
+      )
+      &&
+      globalFeatureEnabled('transactions.manage')
+    )
+
+    ||
+
+    (
+      hasPermission('transactions.manage')
+      &&
+      belongsToAgency(
+        resource.data.get('agencyId', null)
+      )
+      &&
+      globalFeatureEnabled('transactions.manage')
+    );
+
+
+  allow create: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('transactions.manage')
+      &&
+      dgFeatureEnabled('transactions.manage')
+      &&
+      request.resource.data.get('agencyId', null) != null
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('transactions.manage')
+      &&
+      globalFeatureEnabled('transactions.manage')
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+
+    ||
+
+    (
+      hasPermission('transactions.manage')
+      &&
+      globalFeatureEnabled('transactions.manage')
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    );
+
+
+  allow update: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('transactions.manage')
+      &&
+      dgFeatureEnabled('transactions.manage')
+      &&
+      request.resource.data.get('agencyId', null)
+         == resource.data.get('agencyId', null)
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('transactions.manage')
+      &&
+      globalFeatureEnabled('transactions.manage')
+      &&
+      resource.data.get('agencyId', null)
+         == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+
+    ||
+
+    (
+      hasPermission('transactions.manage')
+      &&
+      globalFeatureEnabled('transactions.manage')
+      &&
+      resource.data.get('agencyId', null)
+         == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    );
+
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   BILLETAGE
+   ========================================================= */
+
+match /billetages/{billetageId} {
+
+  allow read: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('billetage.access')
+      &&
+      dgFeatureEnabled('billetage.access')
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('billetage.access')
+      &&
+      belongsToAgency(
+        resource.data.get('agencyId', null)
+      )
+      &&
+      globalFeatureEnabled('billetage.access')
+    )
+
+    ||
+
+    (
+      hasPermission('billetage.access')
+      &&
+      belongsToAgency(
+        resource.data.get('agencyId', null)
+      )
+      &&
+      globalFeatureEnabled('billetage.access')
+    );
+
+
+  allow create: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('billetage.access')
+      &&
+      dgFeatureEnabled('billetage.access')
+      &&
+      request.resource.data.get('agencyId', null) != null
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('billetage.access')
+      &&
+      globalFeatureEnabled('billetage.access')
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+
+    ||
+
+    (
+      hasPermission('billetage.access')
+      &&
+      globalFeatureEnabled('billetage.access')
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    );
+
+
+  allow update: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('billetage.access')
+      &&
+      dgFeatureEnabled('billetage.access')
+      &&
+      request.resource.data.get('agencyId', null)
+         == resource.data.get('agencyId', null)
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('billetage.access')
+      &&
+      globalFeatureEnabled('billetage.access')
+      &&
+      resource.data.get('agencyId', null)
+         == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+
+    ||
+
+    (
+      hasPermission('billetage.access')
+      &&
+      globalFeatureEnabled('billetage.access')
+      &&
+      resource.data.get('agencyId', null)
+         == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    );
+
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   RAPPORTS
+   ========================================================= */
+
+match /reports/{reportId} {
+
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      isAdministrateurAgence()
+      &&
+      belongsToAgency(
+        resource.data.get('agencyId', null)
+      )
+    )
+    ||
+    (
+      hasPermission('reports.manage')
+      &&
+      belongsToAgency(
+        resource.data.get('agencyId', null)
+      )
+    )
+    ||
+    (
+      isAgent()
+      &&
+      resource.data.get('createdBy', null) == request.auth.uid
+    );
+
+  allow create: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      isAdministrateurAgence()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+    ||
+    (
+      hasPermission('reports.manage')
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+    ||
+    (
+      isAgent()
+      &&
+      request.resource.data.get('createdBy', null) == request.auth.uid
+      &&
+      request.resource.data.get('agencyId', null) == currentAgencyId()
+    );
+
+  allow update: if
+    isSystemAdmin()
+    ||
+    (
+      isDG()
+      &&
+      request.resource.data.get('agencyId', null)
+         == resource.data.get('agencyId', null)
+    )
+    ||
+    (
+      isAdministrateurAgence()
+      &&
+      resource.data.get('agencyId', null)
+         == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+    ||
+    (
+      hasPermission('reports.manage')
+      &&
+      resource.data.get('agencyId', null)
+         == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+    ||
+    (
+      isAgent()
+      &&
+      resource.data.get('createdBy', null) == request.auth.uid
+      &&
+      request.resource.data.get('createdBy', null) == request.auth.uid
+      &&
+      (
+        resource.data.get('status', '') == 'brouillon'
+        ||
+        resource.data.get('status', '') == 'retourne'
+      )
+    );
+
+  allow delete: if
+    isSystemAdmin()
+    ||
+    (
+      isAgent()
+      &&
+      resource.data.get('createdBy', null) == request.auth.uid
+      &&
+      resource.data.get('status', '') == 'brouillon'
+    );
+}
+
+
+/* =========================================================
+   COMMISSIONS
+   ========================================================= */
+
+match /commissions/{commissionId} {
+
+  allow read: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('commissions.manage')
+      &&
+      dgFeatureEnabled('commissions.manage')
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('commissions.manage')
+      &&
+      belongsToAgency(
+        resource.data.get('agencyId', null)
+      )
+      &&
+      globalFeatureEnabled('commissions.manage')
+    )
+
+    ||
+
+    (
+      hasPermission('commissions.manage')
+      &&
+      belongsToAgency(
+        resource.data.get('agencyId', null)
+      )
+      &&
+      globalFeatureEnabled('commissions.manage')
+    );
+
+
+  allow create: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('commissions.manage')
+      &&
+      dgFeatureEnabled('commissions.manage')
+      &&
+      request.resource.data.get('agencyId', null) != null
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('commissions.manage')
+      &&
+      globalFeatureEnabled('commissions.manage')
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+
+    ||
+
+    (
+      hasPermission('commissions.manage')
+      &&
+      globalFeatureEnabled('commissions.manage')
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    );
+
+
+  allow update: if
+
+    isSystemAdmin()
+
+    ||
+
+    (
+      isDG()
+      &&
+      hasPermission('commissions.manage')
+      &&
+      dgFeatureEnabled('commissions.manage')
+      &&
+      request.resource.data.get('agencyId', null)
+         == resource.data.get('agencyId', null)
+    )
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      hasPermission('commissions.manage')
+      &&
+      globalFeatureEnabled('commissions.manage')
+      &&
+      resource.data.get('agencyId', null)
+         == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    )
+
+    ||
+
+    (
+      hasPermission('commissions.manage')
+      &&
+      globalFeatureEnabled('commissions.manage')
+      &&
+      resource.data.get('agencyId', null)
+         == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null)
+         == currentAgencyId()
+    );
+
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   JOURNAL D'AUDIT
+   ========================================================= */
+
+match /auditLogs/{logId} {
+
+  allow read: if
+    isSystemAdmin()
+    ||
+    hasPermission('audit.read');
+
+  allow create: if isActiveUser();
+
+  allow update, delete: if false;
+}
+
+/* =========================================================
+   OPERATIONS & AFFECTATIONS D'OPERATIONS (SyncWorker)
+   ========================================================= */
+
+match /operations/{operationId} {
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      resource.data.get('agencyId', null) == currentAgencyId()
+    )
+    ||
+    (
+      (isClient() || isAbonne())
+      &&
+      (
+        resource.data.get('clientUid', null) == request.auth.uid
+        ||
+        resource.data.get('senderId', null) == request.auth.uid
+      )
+    );
+
+  allow create: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      request.resource.data.get('agencyId', null) == currentAgencyId()
+    );
+
+  allow update: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      resource.data.get('agencyId', null) == currentAgencyId()
+      &&
+      request.resource.data.get('agencyId', null) == resource.data.get('agencyId', null)
+      &&
+      (
+        resource.data.get('status', '') != 'validated'
+        ||
+        (
+          request.resource.data.get('amount', null) == resource.data.get('amount', null)
+          &&
+          request.resource.data.get('currency', null) == resource.data.get('currency', null)
+        )
+      )
+    );
+
+  allow delete: if isSystemAdmin() || isDG();
+}
+
+match /operationAssignments/{assignmentId} {
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      resource.data.get('agencyId', null) == currentAgencyId()
+    );
+
+  allow create, update: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      request.resource.data.get('agencyId', null) == currentAgencyId()
+    );
+
+  allow delete: if isSystemAdmin() || isDG();
+}
+
+match /debts/{debtId} {
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      belongsToAgency(resource.data.get('agencyId', null))
+    );
+
+  allow create, update: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      request.resource.data.get('agencyId', null) == currentAgencyId()
+    );
+
+  allow delete: if isSystemAdmin() || isDG();
+}
+
+match /interAgencyTransfers/{transferId} {
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      (
+        resource.data.get('sourceAgencyId', null) == currentAgencyId()
+        ||
+        resource.data.get('targetAgencyId', null) == currentAgencyId()
+      )
+    );
+
+  allow create: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      request.resource.data.get('sourceAgencyId', null) == currentAgencyId()
+    );
+
+  allow update: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      (isAdministrateurAgence() || isAgent())
+      &&
+      (
+        resource.data.get('sourceAgencyId', null) == currentAgencyId()
+        ||
+        resource.data.get('targetAgencyId', null) == currentAgencyId()
+      )
+      &&
+      request.resource.data.get('sourceAgencyId', null) == resource.data.get('sourceAgencyId', null)
+      &&
+      request.resource.data.get('amount', null) == resource.data.get('amount', null)
+    );
+
+  allow delete: if isSystemAdmin() || isDG();
+}
+
+
+/* =========================================================
+   MESSAGES
+   ========================================================= */
+
+match /messages/{messageId} {
+
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      isActiveUser()
+      &&
+      (
+        resource.data.get('channelType', '') in ['global', 'service']
+        ||
+        (
+          resource.data.get('channelType', '') == 'agency'
+          && resource.data.get('agencyId', null) == currentAgencyId()
+        )
+        ||
+        resource.data.get('senderId', null) == request.auth.uid
+        ||
+        resource.data.get('recipientId', null) == request.auth.uid
+        ||
+        (
+          'groupParticipantIds' in resource.data
+          && request.auth.uid in resource.data.groupParticipantIds
+        )
+      )
+    );
+
+  allow create: if
+    isActiveUser()
+    && request.resource.data.get('senderId', null) == request.auth.uid
+    && (
+      isSystemAdmin()
+      || isDG()
+      || request.resource.data.get('agencyId', null) == null
+      || request.resource.data.get('agencyId', null) == currentAgencyId()
+    );
+
+  allow update: if
+    isActiveUser()
+    && (
+      isSystemAdmin()
+      || isDG()
+      || resource.data.get('senderId', null) == request.auth.uid
+      || (
+        request.resource.data.get('content', null) == resource.data.get('content', null)
+        && request.resource.data.get('senderId', null) == resource.data.get('senderId', null)
+      )
+    );
+
+  allow delete: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (isActiveUser() && resource.data.senderId == request.auth.uid);
+}
+
+
+/* =========================================================
+   NUMEROS INTERNES
+   ========================================================= */
+
+match /internalNumbers/{numberId} {
+
+  allow read: if isActiveUser();
+
+  allow create, update, delete: if
+    isSystemAdmin()
+    ||
+    (
+      hasPermission('internal_numbers.manage')
+      &&
+      (
+        isDG()
+        ? dgFeatureEnabled('internal_numbers.manage')
+        : globalFeatureEnabled('internal_numbers.manage')
+      )
+    );
+}
+
+
+/* =========================================================
+   OPERATIONS SMS DES NUMEROS INTERNES
+
+   Flux :
+   Téléphone de l'agent
+        ↓
+   SMS opérateur
+        ↓
+   Dexie / Offline Queue
+        ↓
+   Firestore smsOperations
+        ↓
+   DG / supervision
+
+   SECURITE :
+   - Administrateur Système : accès global
+   - DG : lecture globale
+   - Administrateur d'agence : lecture de son agence
+   - Agent : écrit uniquement pour son numéro affecté
+   - Client / Abonné : aucun accès
+   ========================================================= */
+
+match /smsOperations/{operationId} {
+
+  /* -------------------------------------------------------
+     LECTURE
+     - Administrateur Système : accès complet
+     - Directeur Général : supervision globale de tous les SMS
+     - Administrateur d'agence : accès limité aux SMS de son agence
+     - Autres rôles (Clients/Abonnés) : aucun accès
+     ------------------------------------------------------- */
+
+  allow read: if
+    isSystemAdmin()
+
+    ||
+
+    isDG()
+
+    ||
+
+    (
+      isAdministrateurAgence()
+      &&
+      (
+        resource.data.get('agencyId', null) == currentAgencyId()
+        ||
+        resource.data.get('agencyId', null) == null
+      )
+    );
+
+
+  /* -------------------------------------------------------
+     CREATION PAR LE TERMINAL COLLECTEUR DE L'AGENCE
+     
+     L'appareil collecteur authentifié (Agent ou Administrateur)
+     transmet les SMS captés avec internalNumberId obligatoire.
+     ------------------------------------------------------- */
+
+  allow create: if
+    isSystemAdmin()
+
+    ||
+
+    isDG()
+
+    ||
+
+    (
+      (isAgent() || isAdministrateurAgence())
+      &&
+      request.resource.data.get('internalNumberId', null) != null
+      &&
+      (
+        request.resource.data.get('agencyId', null) == null
+        ||
+        request.resource.data.get('agencyId', null) == currentAgencyId()
+      )
+    );
+
+
+  /* -------------------------------------------------------
+     MISE A JOUR
+     
+     Permet la mise à jour des états de synchronisation,
+     du rapprochement et du traitement par le superviseur ou l'agent.
+     ------------------------------------------------------- */
+
+  allow update: if
+    isSystemAdmin()
+
+    ||
+
+    isDG()
+
+    ||
+
+    (
+      (isAgent() || isAdministrateurAgence())
+      &&
+      resource.data.get('internalNumberId', null) != null
+      &&
+      request.resource.data.get('internalNumberId', null)
+         == resource.data.get('internalNumberId', null)
+      &&
+      (
+        resource.data.get('agencyId', null) == null
+        ||
+        resource.data.get('agencyId', null) == currentAgencyId()
+      )
+    );
+
+
+  /* -------------------------------------------------------
+     SUPPRESSION
+     ------------------------------------------------------- */
+
+  allow delete: if isSystemAdmin() || isDG();
+}
+
+
+/* =========================================================
+   NOTIFICATIONS
+   ========================================================= */
+
+match /notifications/{notificationId} {
+
+  allow read: if
+    isSystemAdmin()
+    || isDG()
+    || (
+      isActiveUser()
+      && (
+        resource.data.get('targetType', 'all') == 'all'
+        || resource.data.get('targetAgencyId', null) == currentAgencyId()
+        || resource.data.get('targetRole', null) == currentUserData().get('role', null)
+      )
+    );
+
+  allow create: if
+    isSystemAdmin()
+    || isDG()
+    || (
+      isAdministrateurAgence()
+      && request.resource.data.get('targetAgencyId', null) == currentAgencyId()
+    );
+
+  allow update: if
+    isSystemAdmin()
+    || isDG()
+    || (
+      // Confirmation de lecture / accusé par un utilisateur actif
+      isActiveUser()
+      && request.resource.data.get('title', null) == resource.data.get('title', null)
+      && request.resource.data.get('message', null) == resource.data.get('message', null)
+    );
+
+  allow delete: if isSystemAdmin() || isDG();
+}
+
+
+/* =========================================================
+   SALAIRES MENSUELS DES AGENTS (salaries)
+   ========================================================= */
+
+match /salaries/{salaryId} {
+
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      isActiveUser()
+      &&
+      (
+        resource.data.get('agentId', null) == request.auth.uid
+        ||
+        resource.data.get('designatedPayerId', null) == request.auth.uid
+        ||
+        (
+          resource.data.get('agencyId', null) == currentAgencyId()
+          &&
+          (isAdministrateurAgence() || isAgent())
+        )
+      )
+    );
+
+  /* Seul le DG (ou Admin Système) peut créer/configurer un salaire */
+  allow create: if isSystemAdmin() || isDG();
+
+  /* Mise à jour contrôlée :
+     - DG / Admin Système : autorisation complète
+     - Agent concerné : uniquement confirmation de réception (sans modifier plannedAmount ni agentId)
+     - Payeur désigné : uniquement exécution du paiement autorisé (sans modifier plannedAmount ni agentId)
+  */
+  allow update: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      isActiveUser()
+      &&
+      resource.data.get('agentId', null) == request.auth.uid
+      &&
+      request.resource.data.get('agentId', null) == resource.data.get('agentId', null)
+      &&
+      request.resource.data.get('plannedAmount', 0) == resource.data.get('plannedAmount', 0)
+    )
+    ||
+    (
+      isActiveUser()
+      &&
+      (
+        resource.data.get('designatedPayerId', null) == request.auth.uid
+        ||
+        resource.data.get('agencyId', null) == currentAgencyId()
+      )
+      &&
+      request.resource.data.get('agentId', null) == resource.data.get('agentId', null)
+      &&
+      request.resource.data.get('plannedAmount', 0) == resource.data.get('plannedAmount', 0)
+    );
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   RECLAMATIONS DE SALAIRE EN RETARD (salaryClaims)
+   ========================================================= */
+
+match /salaryClaims/{claimId} {
+
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      isActiveUser()
+      &&
+      resource.data.get('agentId', null) == request.auth.uid
+    );
+
+  allow create: if
+    isActiveUser()
+    &&
+    request.resource.data.get('agentId', null) == request.auth.uid;
+
+  allow update: if isSystemAdmin() || isDG();
+
+  allow delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   AVANCES SUR SALAIRE (salaryAdvances)
+   ========================================================= */
+
+match /salaryAdvances/{advanceId} {
+
+  allow read: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      isActiveUser()
+      &&
+      (
+        resource.data.get('agentId', null) == request.auth.uid
+        ||
+        resource.data.get('designatedPayerId', null) == request.auth.uid
+        ||
+        resource.data.get('agencyId', null) == currentAgencyId()
+      )
+    );
+
+  /* Un agent actif soumet sa propre demande d'avance avec décision initialisée à en_attente */
+  allow create: if
+    isActiveUser()
+    &&
+    request.resource.data.get('agentId', null) == request.auth.uid
+    &&
+    request.resource.data.get('dgDecision', 'en_attente') == 'en_attente';
+
+  /* Seul le DG peut modifier dgDecision / approvedMonthsCount. Le payeur ou l'agent ne peut pas modifier dgDecision */
+  allow update: if
+    isSystemAdmin()
+    ||
+    isDG()
+    ||
+    (
+      isActiveUser()
+      &&
+      (
+        resource.data.get('agentId', null) == request.auth.uid
+        ||
+        resource.data.get('designatedPayerId', null) == request.auth.uid
+        ||
+        resource.data.get('agencyId', null) == currentAgencyId()
+      )
+      &&
+      request.resource.data.get('dgDecision', null) == resource.data.get('dgDecision', null)
+      &&
+      request.resource.data.get('approvedMonthsCount', null) == resource.data.get('approvedMonthsCount', null)
+    );
+
+  allow delete: if isSystemAdmin();
+}
+
+
+
+
+/* =========================================================
+   REGLEMENTS
+   ========================================================= */
+
+match /regulations/{regulationId} {
+
+  allow read: if isActiveUser();
+
+  allow create, update, delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   ACCEPTATION DES REGLEMENTS
+   ========================================================= */
+
+match /regulationAcceptances/{acceptanceId} {
+
+  allow read: if
+    (
+      isSignedIn()
+      &&
+      resource.data.userId == request.auth.uid
+    )
+    ||
+    isSystemAdmin();
+
+  allow create: if
+    isActiveUser()
+    &&
+    request.resource.data.userId == request.auth.uid;
+
+  allow update, delete: if isSystemAdmin();
+}
+
+
+/* =========================================================
+   DENI PAR DEFAUT
+   ========================================================= */
+
+match /{document=**} {
+  allow read, write: if false;
+}
+
+}
+}

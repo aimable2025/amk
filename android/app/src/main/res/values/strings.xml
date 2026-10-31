@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Ets AMANI</string>
+    <string name="title_activity_main">Ets AMANI</string>
+    <string name="package_name">cd.etsamani.app</string>
+    <string name="custom_url_scheme">cd.etsamani.app</string>
+</resources>

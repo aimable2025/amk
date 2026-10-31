@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="fr" class="bg-slate-900">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="apple-touch-icon" href="/logo.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>Ets AMANI</title>
+    <meta name="description" content="Plate-forme de supervision générale, de gestion opérationnelle, de contrôle interne, de suivi, de collaboration et de traçabilité de l'Ets AMANI" />
+    <meta property="og:title" content="Ets AMANI" />
+    <meta property="og:description" content="Plate-forme de supervision générale, de gestion opérationnelle, de contrôle interne, de suivi, de collaboration et de traçabilité de l'Ets AMANI" />
+    <meta property="og:image" content="/logo.png" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body class="bg-slate-900 text-white min-h-screen">
+    <div id="root"></div>
+
+    <!-- Script de capture d'erreurs sur écran mobile -->
+    <script>
+      window.addEventListener('error', function(event) {
+        var errorBox = document.getElementById('error-debug-box');
+        if (!errorBox) {
+          errorBox = document.createElement('div');
+          errorBox.id = 'error-debug-box';
+          errorBox.style.position = 'fixed';
+          errorBox.style.bottom = '0';
+          errorBox.style.left = '0';
+          errorBox.style.width = '100%';
+          errorBox.style.maxHeight = '50vh';
+          errorBox.style.overflowY = 'auto';
+          errorBox.style.background = '#b91c1c';
+          errorBox.style.color = '#fff';
+          errorBox.style.padding = '16px';
+          errorBox.style.zIndex = '999999';
+          errorBox.style.fontSize = '12px';
+          errorBox.style.fontFamily = 'monospace';
+          errorBox.style.borderTop = '3px solid #f87171';
+          document.body.appendChild(errorBox);
+        }
+        errorBox.innerHTML += '<b>Erreur JS:</b> ' + event.message + '<br><small>' + event.filename + ':' + event.lineno + '</small><br><br>';
+      });
+
+      window.addEventListener('unhandledrejection', function(event) {
+        var errorBox = document.getElementById('error-debug-box');
+        if (!errorBox) {
+          errorBox = document.createElement('div');
+          errorBox.id = 'error-debug-box';
+          errorBox.style.position = 'fixed';
+          errorBox.style.bottom = '0';
+          errorBox.style.left = '0';
+          errorBox.style.width = '100%';
+          errorBox.style.maxHeight = '50vh';
+          errorBox.style.overflowY = 'auto';
+          errorBox.style.background = '#b91c1c';
+          errorBox.style.color = '#fff';
+          errorBox.style.padding = '16px';
+          errorBox.style.zIndex = '999999';
+          errorBox.style.fontSize = '12px';
+          errorBox.style.fontFamily = 'monospace';
+          errorBox.style.borderTop = '3px solid #f87171';
+          document.body.appendChild(errorBox);
+        }
+        var msg = event.reason ? (event.reason.stack || event.reason.message || event.reason) : 'Inconnue';
+        errorBox.innerHTML += '<b>Erreur Promise:</b> ' + msg + '<br><br>';
+      });
+    </script>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

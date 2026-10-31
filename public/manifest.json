@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "Ets AMANI",
+  "short_name": "Ets AMANI",
+  "description": "Plateforme de gestion opérationnelle, contrôle interne et traçabilité de l'Ets AMANI",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
