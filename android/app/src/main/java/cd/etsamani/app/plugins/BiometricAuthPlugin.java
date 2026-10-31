@@ -10,8 +10,8 @@ import androidx.fragment.app.FragmentActivity;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
-import com.getcapacitor.annotation.PluginMethod;
 
 import java.util.concurrent.Executor;
 
@@ -129,7 +129,6 @@ public class BiometricAuthPlugin extends Plugin {
                     @Override
                     public void onAuthenticationError(int errorCode, @NonNull CharSequence errString) {
                         super.onAuthenticationError(errorCode, errString);
-                        // Codes d'erreur officiels BiometricPrompt (ex: Canceled by user, lockout)
                         String codeStr;
                         if (errorCode == BiometricPrompt.ERROR_USER_CANCELED || errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
                             codeStr = "USER_CANCELED";
@@ -155,8 +154,6 @@ public class BiometricAuthPlugin extends Plugin {
                     @Override
                     public void onAuthenticationFailed() {
                         super.onAuthenticationFailed();
-                        // L'empreinte n'a pas été reconnue par le capteur (inconnu ou mauvais doigt).
-                        // BiometricPrompt gère l'animation visuelle rouge "Non reconnue" et permet à Android d'incrémenter le compteur d'échecs.
                     }
                 });
 
